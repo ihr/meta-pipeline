@@ -1,0 +1,571 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: My custom toolchain v3
+
+Parameters:
+  # You can provide these parameters in your CreateProject API call.
+  ProjectId:
+    Description: Name of your application.
+    Type: String
+  GitHubOwner:
+    Type: String
+    Default: test
+  # AWS documentation is not very clear but it seems that GitHubSecret & GitHubOAuthToken are one and the same thing
+  GitHubSecret:
+    Type: String
+    NoEcho: true
+    Default: test
+  GitHubOAuthToken:
+    Type: String
+    NoEcho: true
+    Default: test
+
+  # About Git
+  RepositoryBranch:
+    Default: master
+    Description: Git branch name.
+    Type: String
+  RepositoryName:
+    Description: Git repository name.
+    MaxLength: 100
+    MinLength: 1
+    Type: String
+    Default: test
+
+Resources:
+  # Each AWS CodeBuild project requires a role for AWS CodeBuild to operate on your code.
+  CodeBuildRole:
+    Description: Creating service role in IAM for AWS CodeBuild
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service: codebuild.amazonaws.com
+      Path: /
+      RoleName: !Sub "CodeStarWorker-${ProjectId}-CodeBuild"
+    Type: AWS::IAM::Role
+
+  # This minimal set of permissions lets AWS CodeBuild retrieve your encrypted code artifact from Amazon S3
+  # and store its logs in Amazon CloudWatch Logs.
+  CodeBuildPolicy:
+    Description: Setting IAM policy for AWS CodeBuild role
+    Properties:
+      PolicyDocument:
+        Statement:
+        - Action:
+          - logs:*
+          - s3:*
+          - kms:GenerateDataKey*
+          - kms:Encrypt
+          - kms:Decrypt
+          Effect: Allow
+          Resource: '*'
+      PolicyName: CodeStarWorkerCodeBuildPolicy
+      Roles:
+      - !Ref 'CodeBuildRole'
+    Type: AWS::IAM::Policy
+
+  CodeBuildProject:
+    DependsOn:
+    - CodeBuildPolicy
+    Properties:
+      Artifacts:
+        Packaging: zip
+        Type: codepipeline
+      Description: !Sub "AWS CodeStar created CodeBuild Project for ${ProjectId}"
+      Environment:
+        ComputeType: small
+        # This environment variable informs AWS CodeBuild where it can retrieve your code artifact.
+        # You can specify any other environment variables your buildspec.yml is looking for.
+        EnvironmentVariables:
+        - Name: S3_BUCKET
+          Value: !Ref 'S3Bucket'
+        # Replace this Docker image if necessary: https://docs.aws.amazon.com/codebuild/latest/userguide/build-env-ref-available.html
+        Image: aws/codebuild/eb-nodejs-6.10.0-amazonlinux-64:4.0.0
+        Type: LINUX_CONTAINER
+      Name: !Ref 'ProjectId'
+      ServiceRole: !Ref 'CodeBuildRole'
+      Source:
+        Type: codepipeline
+    Type: AWS::CodeBuild::Project
+
+  # If your pipeline will create resources through AWS CloudFormation as well as deploy your source code,
+  # then specify a role for AWS CloudFormation to use. These permissions dictate which runtime resources
+  # AWS CloudFormation can create and modify on your behalf.
+  CloudFormationTrustRole:
+    Description: Creating service role in IAM for AWS CloudFormation
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - cloudformation.amazonaws.com
+      Path: /
+      Policies:
+      - PolicyDocument:
+          Statement:
+          - Action:
+            - codestar:*
+            - s3:*
+            - lambda:*
+            - dynamodb:*
+            - kinesis:*
+            - cloudformation:*
+            - sns:*
+            - config:*
+            - iam:*
+            - apigateway:*
+            Effect: Allow
+            Resource: '*'
+        PolicyName: CloudFormationRolePolicy
+      RoleName: !Sub "CodeStarWorker-${ProjectId}-CFRole"
+    Type: AWS::IAM::Role
+
+  # This policy is applied to the Amazon S3 bucket that AWS CodePipeline will use as your artifact store.
+  S3ArtifactBucketPolicy:
+    Description: Setting Amazon S3 bucket policy for AWS CodePipeline access
+    Properties:
+      Bucket: !Ref 'S3Bucket'
+      PolicyDocument:
+        Id: SSEAndSSLPolicy
+        Statement:
+        - Action:
+          - s3:GetObject
+          - s3:GetObjectVersion
+          - s3:GetBucketVersioning
+          Condition:
+            Bool:
+              aws:SecureTransport: false
+          Effect: Allow
+          Principal:
+            AWS:
+            - !GetAtt 'CodePipelineTrustRole.Arn'
+            # AWS CodeBuild retrieves the source code from the artifact bucket.
+            - !GetAtt 'CodeBuildRole.Arn'
+            # AWS CloudFormation retrieves a template file from this bucket to create
+            # the runtime resources.
+            - !GetAtt 'CloudFormationTrustRole.Arn'
+          Resource:
+          - !Sub 'arn:aws:s3:::${S3Bucket}'
+          - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+          Sid: WhitelistedGet
+        - Action:
+          - s3:PutObject
+          Effect: Allow
+          Principal:
+            AWS:
+            - !GetAtt 'CodePipelineTrustRole.Arn'
+            - !GetAtt 'CodeBuildRole.Arn'
+          Resource:
+          - !Sub 'arn:aws:s3:::${S3Bucket}'
+          - !Sub 'arn:aws:s3:::${S3Bucket}/*'
+          Sid: WhitelistedPut
+        Version: 2012-10-17
+    Type: AWS::S3::BucketPolicy
+
+  S3Bucket:
+    DeletionPolicy: Retain
+    Description: Creating Amazon S3 bucket for AWS CodePipeline artifacts
+    Properties:
+      BucketName: !Sub "aws-codestar-${AWS::Region}-${AWS::AccountId}-${ProjectId}"
+      Tags:
+      - Key: Name
+        Value: !Sub "${ProjectId}-S3Bucket"
+      VersioningConfiguration:
+        Status: Enabled
+    Type: AWS::S3::Bucket
+
+  CodePipelineTrustRole:
+    Description: Creating service role in IAM for AWS CodePipeline
+    Properties:
+      AssumeRolePolicyDocument:
+        Statement:
+        - Action: sts:AssumeRole
+          Effect: Allow
+          Principal:
+            Service:
+            - codepipeline.amazonaws.com
+          Sid: 1
+      Path: /
+      Policies:
+      - PolicyDocument:
+          Statement:
+          # Your pipeline will generally need permissions to store and retrieve artifacts in Amazon S3.
+          # It will also need permissions to detect changes to your repository, start
+          # a build against your AWS CodeBuild project, and create an AWS CloudFormation stack
+          # containing your runtime resources.
+          - Action:
+            - s3:*
+            - codecommit:*
+            - codebuild:*
+            - cloudformation:*
+            - iam:*
+            - 'lambda:InvokeFunction'
+            - 'lambda:ListFunctions'
+            - 'lambda:InvokeAsyc'
+            Effect: Allow
+            Resource: '*'
+          # If your pipeline will not create AWS CloudFormation stacks, remove
+          # the following action.
+          - Action:
+            - iam:PassRole
+            Effect: Allow
+            Resource:
+            - !GetAtt 'CloudFormationTrustRole.Arn'
+        PolicyName: CodeStarWorkerCodePipelineRolePolicy
+      RoleName: !Sub "CodeStarWorker-${ProjectId}-CodePipeline"
+    Type: AWS::IAM::Role
+
+
+  # Integration tests function
+  StartTestsFunctionExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Action:
+              - 'sts:AssumeRole'
+            Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+      Path: /
+      Policies:
+        - PolicyName: InvokeAsync
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Action:
+                  - 'lambda:InvokeAsync'
+                  - 'lambda:InvokeFunction'
+                  - 'cloudformation:DescribeStacks'
+                  - 'codepipeline:*'
+                  - 'logs:*'
+                Effect: Allow
+                Resource: '*'
+
+  StartTestsFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub '${ProjectId}_start_tests'
+      Description: !Sub 'Starts integration tests function ${ProjectId}'
+      Handler: index.lambda_handler
+      MemorySize: 128
+      Role: !GetAtt StartTestsFunctionExecutionRole.Arn
+      Runtime: python2.7
+      Timeout: 10
+      Code:
+        ZipFile: >
+          import json
+
+          import boto3
+
+          import uuid
+
+          cp = boto3.client("codepipeline")
+
+          cf = boto3.client("cloudformation")
+
+          lambda_client = boto3.client("lambda")
+
+          def lambda_handler(event, context):
+              print json.dumps(event, sort_keys=True, indent=4, separators=(',', ': '))
+
+              job_id = event["CodePipeline.job"]["id"]
+              user_parameters = event["CodePipeline.job"]["data"]["actionConfiguration"]["configuration"]["UserParameters"]
+              stack_name = user_parameters.split("|")[0]
+              test_stack_name = user_parameters.split("|")[1]
+              stage = user_parameters.split("|")[2]
+
+              print("looking for ApiUrl in {} Stack".format(stack_name))
+              api_url, error = _get_property_from_stack(stack_name, "ApiUrl")
+              if not api_url:
+                  _fail_job(job_id, error)
+                  return
+
+              print("looking for TestFunction in {} Stack".format(test_stack_name))
+              test_function, error = _get_property_from_stack(test_stack_name, "TestFunction")
+              if not test_function:
+                  _fail_job(job_id, error)
+                  return
+
+              lambda_client.invoke_async(
+                FunctionName=test_function,
+                InvokeArgs=json.dumps({
+                  "job_id": job_id,
+                  "api_url": api_url
+                })
+              )
+
+          def _get_property_from_stack(stack_name, property_key):
+              stack_data = cf.describe_stacks(StackName=stack_name)
+
+              if not stack_data or len(stack_data["Stacks"]) == 0:
+                  return None, "Could not find stack"
+
+              current_stack = stack_data["Stacks"][0]
+
+              if "Outputs" not in current_stack:
+                  return None, "Could not find outputs in stack"
+
+              for cur_output in current_stack["Outputs"]:
+                  if cur_output["OutputKey"] == property_key:
+                      return cur_output["OutputValue"], None
+
+              return None, "Could not find {} output property in stack".format(property_key)
+
+          def _complete_job(job_id):
+              cp.put_job_success_result(jobId=job_id)
+
+          def _fail_job(job_id, failure_reason):
+              cp.put_job_failure_result(
+                      jobId=job_id,
+                      failureDetails={
+                          'type': 'JobFailed',
+                          'message': failure_reason,
+                          'externalExecutionId': uuid.uuid4().hex
+                      }
+                  )
+
+
+  ProjectPipeline:
+    # The pipeline should only be created once all the resources it links to have been created.
+    # This includes the AWS CodePipeline service role, the artifact bucket, the AWS CodeBuild build projectTemplateId,
+    # and the role it will pass to AWS CloudFormation to create stacks.
+    DependsOn:
+    - CodePipelineTrustRole
+    - S3Bucket
+    - CodeBuildProject
+    - CloudFormationTrustRole
+    Description: Creating a deployment pipeline for your project in AWS CodePipeline
+    Properties:
+      ArtifactStore:
+        Location: !Ref 'S3Bucket'
+        Type: S3
+      Name: !Sub "${ProjectId}-Pipeline"
+      RoleArn: !GetAtt 'CodePipelineTrustRole.Arn'
+
+      Stages:
+      - Name: Source
+        Actions:
+          - Name: ApplicationSource
+            ActionTypeId:
+              Category: Source
+              Owner: ThirdParty
+              Provider: GitHub
+              Version: 1
+            Configuration:
+              Owner: !Ref GitHubOwner
+              Repo: !Ref RepositoryName
+              OAuthToken: !Ref GitHubOAuthToken
+              Branch: !Ref RepositoryBranch
+              PollForSourceChanges: false
+            InputArtifacts: []
+            OutputArtifacts:
+              - Name: !Sub "${ProjectId}-SourceArtifact"
+            RunOrder: 1
+      - Name: Build
+        Actions:
+          - Name: CodeBuild
+            ActionTypeId:
+              Category: Build
+              Owner: AWS
+              Provider: CodeBuild
+              Version: 1
+            Configuration:
+              ProjectName: !Ref 'ProjectId'
+            InputArtifacts:
+              - Name: !Sub "${ProjectId}-SourceArtifact"
+            OutputArtifacts:
+              - Name: !Sub "${ProjectId}-BuildArtifact"
+      - Name: DeployTests
+        Actions:
+          - Name: CreateChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: 1
+            Configuration:
+              ActionMode: CHANGE_SET_REPLACE
+              Capabilities: CAPABILITY_NAMED_IAM
+              ChangeSetName: !Sub 'awscodestar-${ProjectId}-ChangeSet-Tests'
+              RoleArn: !GetAtt 'CloudFormationTrustRole.Arn'
+              StackName: !Sub 'awscodestar-${ProjectId}-Stack-Tests'
+              TemplatePath: !Sub '${ProjectId}-BuildArtifact::test-output_sam.yaml'
+              ParameterOverrides: !Sub '{ "ProjectId":"${ProjectId}" }'
+            InputArtifacts:
+              - Name: !Sub '${ProjectId}-BuildArtifact'
+            OutputArtifacts:
+              - Name: TestChangeSet
+            RunOrder: 1
+          - Name: ExecuteChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: 1
+            Configuration:
+              ActionMode: CHANGE_SET_EXECUTE
+              RoleArn: !GetAtt 'CloudFormationTrustRole.Arn'
+              StackName: !Sub 'awscodestar-${ProjectId}-Stack-Tests'
+              ChangeSetName: !Sub 'awscodestar-${ProjectId}-ChangeSet-Tests'
+            OutputArtifacts:
+              - Name: ExecutedTestChangeSet
+            RunOrder: 2
+      - Name: Alpha
+        Actions:
+          - Name: CreateChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: 1
+            Configuration:
+              ActionMode: CHANGE_SET_REPLACE
+              RoleArn: !GetAtt 'CloudFormationTrustRole.Arn'
+              StackName: !Sub "awscodestar-${ProjectId}-Stack-Alpha"
+              ChangeSetName: !Sub 'awscodestar-${ProjectId}-ChangeSet-Alpha'
+              TemplatePath: !Sub '${ProjectId}-BuildArtifact::app-output_sam.yaml'
+              Capabilities: CAPABILITY_NAMED_IAM
+              ParameterOverrides: !Sub '{ "ProjectId":"${ProjectId}", "Stage": "alpha" }'
+            InputArtifacts:
+              - Name: !Sub "${ProjectId}-BuildArtifact"
+            RunOrder: 1
+          - Name: ExecuteChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: 1
+            Configuration:
+              ActionMode: CHANGE_SET_EXECUTE
+              RoleArn: !GetAtt 'CloudFormationTrustRole.Arn'
+              StackName: !Sub 'awscodestar-${ProjectId}-Stack-Alpha'
+              ChangeSetName: !Sub 'awscodestar-${ProjectId}-ChangeSet-Alpha'
+            OutputArtifacts:
+              - Name: !Sub '${ProjectId}AlphaChangeSet'
+            RunOrder: 2
+          - Name: IntegrationTests
+            ActionTypeId:
+              Category: Invoke
+              Owner: AWS
+              Provider: Lambda
+              Version: 1
+            Configuration:
+              FunctionName: !Ref StartTestsFunction
+              UserParameters: !Sub 'awscodestar-${ProjectId}-Stack-Alpha|awscodestar-${ProjectId}-Stack-Tests|alpha'
+            InputArtifacts:
+              - Name: !Sub '${ProjectId}AlphaChangeSet'
+            RunOrder: 3
+      - Name: Beta
+        Actions:
+          - Name: CreateChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: 1
+            Configuration:
+              ActionMode: CHANGE_SET_REPLACE
+              RoleArn: !GetAtt 'CloudFormationTrustRole.Arn'
+              StackName: !Sub 'awscodestar-${ProjectId}-Stack-Beta'
+              ChangeSetName: !Sub 'awscodestar-${ProjectId}-ChangeSet-Beta'
+              TemplatePath: !Sub '${ProjectId}-BuildArtifact::app-output_sam.yaml'
+              Capabilities: CAPABILITY_NAMED_IAM
+              ParameterOverrides: !Sub '{ "ProjectId":"${ProjectId}", "Stage": "beta" }'
+            InputArtifacts:
+              - Name: !Sub '${ProjectId}-BuildArtifact'
+            RunOrder: 1
+          - Name: ExecuteChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: 1
+            Configuration:
+              ActionMode: CHANGE_SET_EXECUTE
+              RoleArn: !GetAtt 'CloudFormationTrustRole.Arn'
+              StackName: !Sub 'awscodestar-${ProjectId}-Stack-Beta'
+              ChangeSetName: !Sub 'awscodestar-${ProjectId}-ChangeSet-Beta'
+            OutputArtifacts:
+              - Name: !Sub '${ProjectId}BetaChangeSet'
+            RunOrder: 2
+          - Name: IntegrationTests
+            ActionTypeId:
+              Category: Invoke
+              Owner: AWS
+              Provider: Lambda
+              Version: 1
+            Configuration:
+              FunctionName: !Ref StartTestsFunction
+              UserParameters: !Sub 'awscodestar-${ProjectId}-Stack-Beta|awscodestar-${ProjectId}-Stack-Tests|beta'
+            InputArtifacts:
+              - Name: !Sub '${ProjectId}BetaChangeSet'
+            RunOrder: 3
+      - Name: Prod
+        Actions:
+          - Name: DeploymentApproval
+            ActionTypeId:
+              Category: Approval
+              Owner: AWS
+              Provider: Manual
+              Version: 1
+            RunOrder: 1
+          - Name: GenerateChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: 1
+            Configuration:
+              ActionMode: CHANGE_SET_REPLACE
+              Capabilities: CAPABILITY_NAMED_IAM
+              ChangeSetName: !Sub 'awscodestar-${ProjectId}-ChangeSet-Prod'
+              RoleArn: !GetAtt 'CloudFormationTrustRole.Arn'
+              StackName: !Sub 'awscodestar-${ProjectId}-Stack-Prod'
+              # These are the parameters that will be set in your AWS CloudFormation stack.
+              ParameterOverrides: !Sub '{"ProjectId":"${ProjectId}", "Stage": "prod"}'
+              # Our sample AWS CodeBuild project uses the following yml file to run a build,
+              # and then AWS CodeBuild places the file into the build artifact.
+              # Modify this line to point to a different yml file you want AWS CodeBuild to use.
+              TemplatePath: !Sub '${ProjectId}-BuildArtifact::app-output_sam.yaml'
+            InputArtifacts:
+            - Name: !Sub '${ProjectId}-BuildArtifact'
+            OutputArtifacts: []
+            RunOrder: 2
+          - Name: ExecuteChangeSet
+            ActionTypeId:
+              Category: Deploy
+              Owner: AWS
+              Provider: CloudFormation
+              Version: 1
+            Configuration:
+              ActionMode: CHANGE_SET_EXECUTE
+              ChangeSetName: !Sub 'awscodestar-${ProjectId}-ChangeSet-Prod'
+              StackName: !Sub 'awscodestar-${ProjectId}-Stack-Prod'
+            InputArtifacts: []
+            OutputArtifacts:
+              - Name: !Sub '${ProjectId}ProdChangeSet'
+            RunOrder: 3
+    Type: AWS::CodePipeline::Pipeline
+
+  SourceEvent:
+    Type: AWS::CodePipeline::Webhook
+    Properties:
+      Authentication: GITHUB_HMAC
+      AuthenticationConfiguration:
+        SecretToken: !Ref GitHubSecret
+      Filters:
+        -
+          JsonPath: "$.ref"
+          MatchEquals: refs/heads/{Branch}
+      TargetPipeline: !Ref ProjectPipeline
+      TargetAction: ApplicationSource
+      TargetPipelineVersion: !GetAtt ProjectPipeline.Version
+      RegisterWithThirdParty: true
+      Name: GitHubWebhook

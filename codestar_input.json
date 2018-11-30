@@ -1,0 +1,41 @@
+{
+    "name": "<your-codestar-project-name>",
+    "id": "<your-codestar-project-id>",
+    "description": "Sample CodeStar project created with the CLI to setup a multi environment setup for Lambda",
+    "sourceCode": [
+        {
+            "source": {
+                "s3": {
+                    "bucketName": "<s3-bucket-name>",
+                    "bucketKey": "src.zip"
+                }
+            },
+            "destination": {
+                "gitHub": {
+                    "name": "<github-repo-name>",
+                    "description": "Test AWS CodeStar",
+                    "type": "<user-or-organisation>",
+                    "owner": "<github-owner>",
+                    "privateRepository": false,
+                    "issuesEnabled": true,
+                    "token": "<github-access-token>"
+                }
+            }
+        }
+    ],
+    "toolchain": {
+        "source": {
+            "s3": {
+                "bucketName": "<s3-bucket-name>",
+                "bucketKey": "codestar_toolchain.yml"
+            }
+        },
+        "stackParameters": {
+            "ProjectId": "<short-project-id-max-15-chars>",
+            "GitHubOwner": "<github-owner>",
+            "RepositoryName": "<github-repo-name>",
+            "GitHubSecret": "<github-access-token>",
+            "GitHubOAuthToken": "<github-access-token>"
+        }
+    }
+}
