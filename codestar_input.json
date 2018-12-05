@@ -14,7 +14,7 @@
                 "gitHub": {
                     "name": "<github-repo-name>",
                     "description": "Test AWS CodeStar",
-                    "type": "<user-or-organisation>",
+                    "type": "<user-or-organization>",
                     "owner": "<github-owner>",
                     "privateRepository": false,
                     "issuesEnabled": true,
