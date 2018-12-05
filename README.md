@@ -1,27 +1,40 @@
 This is a meta pipeline for setting up AWS CodeCommit, CodePipeline, CodeBuild, & CodeDeploy
 # Step 1
 
-Create a bucket to store the seeding artifacts for the setup; These are the src.zip in step 2 and the codestar_toolchain.yml file in step3. For the sake of the example below this is 'codestar-github-test'.
+Make sure you have the latest aws cli. The steps below were executed with:
+
+````
+aws --version
+aws-cli/1.16.61 Python/3.7.1 Darwin/18.2.0 botocore/1.12.51
+````
+to updated it you can run:
+````
+pip install --upgrade awscli
+````
 
 # Step 2
+
+Create a bucket to store the seeding artifacts for the setup; These are the src.zip in step 2 and the codestar_toolchain.yml file in step3. For the sake of the example below this is 'codestar-github-test'.
+
+# Step 3
 
 Then create a zip of your repo; For this example, you can use: https://github.com/ihr/test-codestar
 
 `zip src.zip .gitignore README.md app/* app-sam.yaml buildspec.yml index.js test/* test-sam.yaml tests/*`
 
-# Step 3
+# Step 4
 
 Copy the zip you create in the previous step
 
 `aws s3 cp src.zip s3://codestar-github-test/src.zip`
 
-# Step 4 
+# Step 5 
 
 Copy the codestar_toolchain.yml
 
 `aws s3 cp ./codestar_toolchain.yml s3://codestar-github-test/codestar_toolchain.yml`
 
-# Step 5
+# Step 6
 
 Modify the codestar_input.json so that it contains the right parameters; You will needed a GitHub Access Token which 
 you can create by following this tutorial: https://help.github.com/articles/creating-a-personal-access-token-for-the-command-line/ The access token has to have the following scopes: repo, user, and admin:repo_hook.
