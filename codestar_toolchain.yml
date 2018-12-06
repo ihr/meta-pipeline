@@ -568,4 +568,4 @@ Resources:
       TargetAction: ApplicationSource
       TargetPipelineVersion: !GetAtt ProjectPipeline.Version
       RegisterWithThirdParty: true
-      Name: GitHubWebhook
+      Name: !Sub "GitHubWebhook-${ProjectId}"
