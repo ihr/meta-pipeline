@@ -118,6 +118,7 @@ Resources:
             - config:*
             - iam:*
             - apigateway:*
+            - cognito-idp:*
             Effect: Allow
             Resource: '*'
         PolicyName: CloudFormationRolePolicy
