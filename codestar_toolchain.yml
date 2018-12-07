@@ -174,7 +174,7 @@ Resources:
       BucketName: !Sub "aws-codestar-${AWS::Region}-${AWS::AccountId}-${ProjectId}"
       Tags:
       - Key: Name
-        Value: !Sub "${ProjectId}-S3Bucket"
+        Value: !Sub "${ProjectId}-s3bucket"
       VersioningConfiguration:
         Status: Enabled
     Type: AWS::S3::Bucket
