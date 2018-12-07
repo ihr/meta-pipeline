@@ -347,7 +347,7 @@ Resources:
       ArtifactStore:
         Location: !Ref 'S3Bucket'
         Type: S3
-      Name: !Sub "${ProjectId}-Pipeline"
+      Name: !Sub "${ProjectId}-pipeline"
       RoleArn: !GetAtt 'CodePipelineTrustRole.Arn'
 
       Stages:
