@@ -1,4 +1,5 @@
 This is a meta pipeline for setting up AWS CodeCommit, CodePipeline, CodeBuild, & CodeDeploy
+
 # Step 1
 
 Make sure you have the latest aws cli. The steps below were executed with:
@@ -37,7 +38,7 @@ Copy the codestar_toolchain.yml
 # Step 6
 
 Modify the codestar_input.json so that it contains the right parameters; You will needed a GitHub Access Token which 
-you can create by following this tutorial: https://help.github.com/articles/creating-a-personal-access-token-for-the-command-line/ The access token has to have the following scopes: repo, user, and admin:repo_hook.
+you can create by following this tutorial: https://help.github.com/articles/creating-a-personal-access-token-for-the-command-line/ The access token has to have the following scopes: repo, user, and admin:repo_hook. Important: In case you want to create a private repo in an organization account, make sure that you spell out 'Organization' and not 'organization' as aparently there is a difference which leads to inability to create the Webhook.
 
 `aws codestar create-project --cli-input-json file://codestar_input.json`
 
